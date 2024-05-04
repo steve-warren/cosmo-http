@@ -139,6 +139,9 @@ public sealed class HttpServer
                 cancellationToken
             );
 
+            if (received == 0)
+                return;
+
             var httpRequest = ParseRequest(new ArraySegment<byte>(buffer, 0, received));
             Console.WriteLine($"route {httpRequest.Uri}");
 
