@@ -10,13 +10,12 @@ public record HttpRequest(string Verb, string Uri, string Version);
 public class HttpResponse
 {
     public string ContentType { get; set; } = "";
-    public string Content { get; set; } = "";
+    public byte[] Content { get; set; } = [];
 }
 
 public sealed class HttpServer
 {
     private readonly CancellationTokenSource _cts;
-    private readonly CancellationToken _hostCancellationToken;
     private readonly Channel<Task> _pendingRequests;
     private readonly Dictionary<string, Action<HttpRequest, HttpResponse>> _routes;
 
@@ -27,7 +26,6 @@ public sealed class HttpServer
     )
     {
         _cts = new();
-        _hostCancellationToken = _cts.Token;
         _routes = routes;
         _pendingRequests = Channel.CreateUnbounded<Task>();
 
@@ -55,29 +53,27 @@ public sealed class HttpServer
             SignalShutdown();
         };
 
-        var producer = Producer(serverSocket, _pendingRequests.Writer, _cts.Token);
-        var consumer = Consumer(_pendingRequests.Reader, _cts.Token);
+        var requestHandlerTask = HandleIncomingRequestsAsync(serverSocket);
+        var requestCompletionTask = CompleteIncomingRequestTasksAsync();
 
-        await Task.WhenAll([producer, consumer]);
+        await Task.WhenAll([requestHandlerTask, requestCompletionTask]);
 
         Console.WriteLine("Server stopped.");
     }
 
     public void Shutdown() => SignalShutdown();
 
-    private async Task Producer(
-        Socket serverSocket,
-        ChannelWriter<Task> writer,
-        CancellationToken cancellationToken
-    )
+    private async Task HandleIncomingRequestsAsync(Socket serverSocket)
     {
+        var writer = _pendingRequests.Writer;
+
         while (true)
         {
             try
             {
-                var clientSocket = await serverSocket.AcceptAsync(cancellationToken);
+                var clientSocket = await serverSocket.AcceptAsync(_cts.Token);
 
-                var receiveTask = ReceiveAsync(clientSocket, cancellationToken);
+                var receiveTask = ReceiveAsync(clientSocket, _cts.Token);
 
                 writer.TryWrite(receiveTask);
             }
@@ -94,11 +90,13 @@ public sealed class HttpServer
         }
     }
 
-    private async Task Consumer(ChannelReader<Task> reader, CancellationToken cancellationToken)
+    private async Task CompleteIncomingRequestTasksAsync()
     {
+        var reader = _pendingRequests.Reader;
+
         try
         {
-            while (await reader.WaitToReadAsync(cancellationToken))
+            while (await reader.WaitToReadAsync(_cts.Token))
             {
                 if (reader.TryRead(out var receiveTask))
                 {
@@ -145,19 +143,31 @@ public sealed class HttpServer
             var httpRequest = ParseRequest(new ArraySegment<byte>(buffer, 0, received));
             Console.WriteLine($"route {httpRequest.Uri}");
 
-            if (_routes.TryGetValue(httpRequest.Uri, out var responseHandler))
+            if (_routes.TryGetValue(httpRequest.Uri, out var uriHandler))
             {
                 var httpResponse = new HttpResponse();
 
-                responseHandler(httpRequest, httpResponse);
+                uriHandler(httpRequest, httpResponse);
 
-                var rawResponseBody = Encoding.UTF8.GetBytes(httpResponse.Content);
                 var response = Encoding.UTF8.GetBytes(
-                    $"HTTP/1.1 200 OK\r\nContent-Type:{httpResponse.ContentType}\r\nContent-Length: {rawResponseBody.Length}\r\n\r\n"
+                    $"HTTP/1.1 200 OK\r\nContent-Type:{httpResponse.ContentType}\r\nContent-Length: {httpResponse.Content.Length}\r\n\r\n"
                 );
 
                 await clientSocket.SendAsync(response, cancellationToken);
-                await clientSocket.SendAsync(rawResponseBody, cancellationToken);
+                await clientSocket.SendAsync(httpResponse.Content);
+            }
+            else if (_routes.TryGetValue("/*", out var wildcardHandler))
+            {
+                var httpResponse = new HttpResponse();
+
+                wildcardHandler(httpRequest, httpResponse);
+
+                var response = Encoding.UTF8.GetBytes(
+                    $"HTTP/1.1 200 OK\r\nContent-Type:{httpResponse.ContentType}\r\nContent-Length: {httpResponse.Content.Length}\r\n\r\n"
+                );
+
+                await clientSocket.SendAsync(response, cancellationToken);
+                await clientSocket.SendAsync(httpResponse.Content);
             }
             else
             {

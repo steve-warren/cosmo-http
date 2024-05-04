@@ -3,13 +3,16 @@
 using var cts = new CancellationTokenSource();
 var hostCancellationToken = cts.Token;
 
+var contentCache = new StaticFileContentCache("wwwroot/");
+await contentCache.LoadCacheAsync();
+
 var routes = new Dictionary<string, Action<HttpRequest, HttpResponse>>
 {
     {
         "/",
         (request, response) =>
         {
-            response.Content = "hello, world!";
+            response.Content = "hello, world!"u8.ToArray();
             response.ContentType = "text/plain";
         }
     },
@@ -17,7 +20,7 @@ var routes = new Dictionary<string, Action<HttpRequest, HttpResponse>>
         "/status",
         (request, response) =>
         {
-            response.Content = """{"here" : ["is", "some", "json"]}""";
+            response.Content = """{"here" : ["is", "some", "json"]}"""u8.ToArray();
             response.ContentType = "application/json";
         }
     },
@@ -26,8 +29,18 @@ var routes = new Dictionary<string, Action<HttpRequest, HttpResponse>>
         (request, response) =>
         {
             response.Content =
-                "<html><head><title>index.html</title><body><h1>hello, world!</body></html>";
+                "<html><head><title>index.html</title><body><h1>hello, world!</body></html>"u8.ToArray();
             response.ContentType = "text/html";
+        }
+    },
+    {
+        "/*",
+        (request, response) =>
+        {
+            contentCache.TryGet(request.Uri[1..], out var entry);
+
+            response.Content = entry.Content ?? [];
+            response.ContentType = entry.ContentType ?? "";
         }
     }
 };
