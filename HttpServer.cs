@@ -18,11 +18,13 @@ public sealed class HttpServer
     private readonly CancellationTokenSource _cts;
     private readonly Channel<Task> _pendingRequests;
     private readonly Dictionary<string, Action<HttpRequest, HttpResponse>> _routes;
+    private readonly StaticFileContentCache _contentCache;
 
     public HttpServer(
         string endpoint,
         int port,
-        Dictionary<string, Action<HttpRequest, HttpResponse>> routes
+        Dictionary<string, Action<HttpRequest, HttpResponse>> routes,
+        string staticContentPath
     )
     {
         _cts = new();
@@ -31,6 +33,8 @@ public sealed class HttpServer
 
         Endpoint = endpoint;
         Port = port;
+
+        _contentCache = new StaticFileContentCache(staticContentPath);
     }
 
     public string Endpoint { get; private set; }
@@ -55,8 +59,9 @@ public sealed class HttpServer
 
         var requestHandlerTask = HandleIncomingRequestsAsync(serverSocket);
         var requestCompletionTask = CompleteIncomingRequestTasksAsync();
+        var contentCacheTask = _contentCache.RunAsync(_cts.Token);
 
-        await Task.WhenAll([requestHandlerTask, requestCompletionTask]);
+        await Task.WhenAll([requestHandlerTask, requestCompletionTask, contentCacheTask]);
 
         Console.WriteLine("Server stopped.");
     }
@@ -101,7 +106,7 @@ public sealed class HttpServer
                 if (reader.TryRead(out var receiveTask))
                 {
                     if (!receiveTask.IsCompleted)
-                        await receiveTask;
+                        await receiveTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
                 }
             }
         }
@@ -141,6 +146,7 @@ public sealed class HttpServer
                 return;
 
             var httpRequest = ParseRequest(new ArraySegment<byte>(buffer, 0, received));
+
             Console.WriteLine($"route {httpRequest.Uri}");
 
             if (_routes.TryGetValue(httpRequest.Uri, out var uriHandler))
@@ -155,12 +161,16 @@ public sealed class HttpServer
 
                 await clientSocket.SendAsync(response, cancellationToken);
                 await clientSocket.SendAsync(httpResponse.Content);
-            }
-            else if (_routes.TryGetValue("/*", out var wildcardHandler))
-            {
-                var httpResponse = new HttpResponse();
 
-                wildcardHandler(httpRequest, httpResponse);
+                Console.WriteLine("200 OK");
+            }
+            else if (_contentCache.TryGet(httpRequest.Uri[1..], out var cacheEntry))
+            {
+                var httpResponse = new HttpResponse
+                {
+                    Content = cacheEntry.Content,
+                    ContentType = cacheEntry.ContentType
+                };
 
                 var response = Encoding.UTF8.GetBytes(
                     $"HTTP/1.1 200 OK\r\nContent-Type:{httpResponse.ContentType}\r\nContent-Length: {httpResponse.Content.Length}\r\n\r\n"
@@ -168,6 +178,8 @@ public sealed class HttpServer
 
                 await clientSocket.SendAsync(response, cancellationToken);
                 await clientSocket.SendAsync(httpResponse.Content);
+
+                Console.WriteLine("200 OK");
             }
             else
             {
@@ -175,6 +187,8 @@ public sealed class HttpServer
                     Encoding.UTF8.GetBytes("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"),
                     cancellationToken
                 );
+
+                Console.WriteLine("404 Not Found");
             }
         }
     }
