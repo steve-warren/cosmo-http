@@ -1,0 +1,25 @@
+[binding]
+ip = "127.0.0.1"
+port = 8080
+
+[mime_types]
+".html" = "text/html"
+".htm" = "text/html"
+".css" = "text/css"
+".js" = "text/javascript"
+".json" = "application/json"
+".txt" = "text/plain"
+".jpg" = "image/jpeg"
+".jpeg" = "image/jpeg"
+".png" = "image/png"
+".pdf" = "application/pdf"
+".zip" = "application/zip"
+default = "application/octect-stream"
+
+[static_sites]
+
+[static_sites.local]
+host = "www.local"
+root_directory = "/wwwroot"
+default_file = "index.html"
+

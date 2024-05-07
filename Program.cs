@@ -1,8 +1,5 @@
 ﻿using Cosmo.Http;
 
-using var cts = new CancellationTokenSource();
-var hostCancellationToken = cts.Token;
-
 var routes = new Dictionary<string, Action<HttpRequest, HttpResponse>>
 {
     {
@@ -33,5 +30,16 @@ var routes = new Dictionary<string, Action<HttpRequest, HttpResponse>>
 };
 
 var server = new HttpServer(endpoint: "127.0.0.1", 8080, routes, "wwwroot/");
+
+Console.CancelKeyPress += (sender, e) =>
+{
+    e.Cancel = true;
+    server.Shutdown();
+};
+
+AppDomain.CurrentDomain.ProcessExit += (sender, e) =>
+{
+    server.Shutdown();
+};
 
 await server.RunAsync();

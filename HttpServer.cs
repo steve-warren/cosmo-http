@@ -19,6 +19,7 @@ public sealed class HttpServer
     private readonly Channel<Task> _pendingRequests;
     private readonly Dictionary<string, Action<HttpRequest, HttpResponse>> _routes;
     private readonly StaticFileContentCache _contentCache;
+    private Task? _runTask;
 
     public HttpServer(
         string endpoint,
@@ -34,7 +35,7 @@ public sealed class HttpServer
         Endpoint = endpoint;
         Port = port;
 
-        _contentCache = new StaticFileContentCache(staticContentPath);
+        _contentCache = new StaticFileContentCache(staticContentPath, []);
     }
 
     public string Endpoint { get; private set; }
@@ -42,31 +43,43 @@ public sealed class HttpServer
 
     public async Task RunAsync()
     {
+        var tcs = new TaskCompletionSource();
+        _runTask = _runTask is null
+            ? tcs.Task
+            : throw new InvalidOperationException("Server already running.");
+
         Console.WriteLine("Starting server...");
-
         using var serverSocket = Bind(Endpoint, Port);
-
-        Console.CancelKeyPress += (sender, e) =>
-        {
-            e.Cancel = true;
-            SignalShutdown();
-        };
-
-        AppDomain.CurrentDomain.ProcessExit += (sender, e) =>
-        {
-            SignalShutdown();
-        };
 
         var requestHandlerTask = HandleIncomingRequestsAsync(serverSocket);
         var requestCompletionTask = CompleteIncomingRequestTasksAsync();
         var contentCacheTask = _contentCache.RunAsync(_cts.Token);
 
-        await Task.WhenAll([requestHandlerTask, requestCompletionTask, contentCacheTask]);
+        await Task.WhenAll([requestHandlerTask, requestCompletionTask, contentCacheTask])
+            .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        tcs.SetResult();
 
         Console.WriteLine("Server stopped.");
     }
 
-    public void Shutdown() => SignalShutdown();
+    public void Shutdown()
+    {
+        if (!_cts.IsCancellationRequested)
+        {
+            Console.WriteLine("\nShutting down...");
+            _cts.Cancel();
+        }
+    }
+
+    public ValueTask ShutdownAndWaitAsync()
+    {
+        Shutdown();
+
+        return _runTask is null
+            ? throw new InvalidOperationException("Server hasn't started.")
+            : new ValueTask(_runTask);
+    }
 
     private async Task HandleIncomingRequestsAsync(Socket serverSocket)
     {
@@ -76,7 +89,7 @@ public sealed class HttpServer
         {
             try
             {
-                var clientSocket = await serverSocket.AcceptAsync(_cts.Token);
+                var clientSocket = await serverSocket.AcceptAsync(_cts.Token).ConfigureAwait(false);
 
                 var receiveTask = ReceiveAsync(clientSocket, _cts.Token);
 
@@ -101,7 +114,7 @@ public sealed class HttpServer
 
         try
         {
-            while (await reader.WaitToReadAsync(_cts.Token))
+            while (await reader.WaitToReadAsync(_cts.Token).ConfigureAwait(false))
             {
                 if (reader.TryRead(out var receiveTask))
                 {
@@ -136,11 +149,9 @@ public sealed class HttpServer
         {
             var buffer = new byte[1024];
 
-            var received = await clientSocket.ReceiveAsync(
-                buffer,
-                SocketFlags.None,
-                cancellationToken
-            );
+            var received = await clientSocket
+                .ReceiveAsync(buffer, SocketFlags.None, cancellationToken)
+                .ConfigureAwait(false);
 
             if (received == 0)
                 return;
@@ -159,8 +170,8 @@ public sealed class HttpServer
                     $"HTTP/1.1 200 OK\r\nContent-Type:{httpResponse.ContentType}\r\nContent-Length: {httpResponse.Content.Length}\r\n\r\n"
                 );
 
-                await clientSocket.SendAsync(response, cancellationToken);
-                await clientSocket.SendAsync(httpResponse.Content);
+                await clientSocket.SendAsync(response, cancellationToken).ConfigureAwait(false);
+                await clientSocket.SendAsync(httpResponse.Content).ConfigureAwait(false);
 
                 Console.WriteLine("200 OK");
             }
@@ -176,29 +187,22 @@ public sealed class HttpServer
                     $"HTTP/1.1 200 OK\r\nContent-Type:{httpResponse.ContentType}\r\nContent-Length: {httpResponse.Content.Length}\r\n\r\n"
                 );
 
-                await clientSocket.SendAsync(response, cancellationToken);
-                await clientSocket.SendAsync(httpResponse.Content);
+                await clientSocket.SendAsync(response, cancellationToken).ConfigureAwait(false);
+                await clientSocket.SendAsync(httpResponse.Content).ConfigureAwait(false);
 
                 Console.WriteLine("200 OK");
             }
             else
             {
-                await clientSocket.SendAsync(
-                    Encoding.UTF8.GetBytes("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"),
-                    cancellationToken
-                );
+                await clientSocket
+                    .SendAsync(
+                        Encoding.UTF8.GetBytes("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
 
                 Console.WriteLine("404 Not Found");
             }
-        }
-    }
-
-    private void SignalShutdown()
-    {
-        if (!_cts.IsCancellationRequested)
-        {
-            Console.WriteLine("\nShutting down...");
-            _cts.Cancel();
         }
     }
 

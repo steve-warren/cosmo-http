@@ -5,17 +5,7 @@ namespace Cosmo.Http;
 
 internal sealed class StaticFileContentCache : IAsyncDisposable
 {
-    private static readonly Dictionary<string, string> _mimeTypes =
-        new()
-        {
-            { ".html", "text/html" },
-            { ".css", "text/css" },
-            { ".js", "text/javascript" },
-            { ".jpg", "" },
-            { ".gif", "" },
-            { ".ico", "image/x-icon" }
-        };
-
+    private readonly Dictionary<string, string> _mimeTypes;
     private readonly ConcurrentDictionary<string, CacheEntry> _cache;
     private readonly FileSystemMonitor _fsm;
     private readonly Channel<string> _fileAccumulator;
@@ -25,7 +15,7 @@ internal sealed class StaticFileContentCache : IAsyncDisposable
 
     public readonly record struct CacheEntry(byte[] Content, string ContentType);
 
-    public StaticFileContentCache(string path)
+    public StaticFileContentCache(string path, Dictionary<string, string> mimeTypes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -35,6 +25,7 @@ internal sealed class StaticFileContentCache : IAsyncDisposable
         _fileAccumulator = Channel.CreateUnbounded<string>();
         _fsm = new FileSystemMonitor(path, _fileAccumulator.Writer);
         _cts = new();
+        _mimeTypes = mimeTypes;
     }
 
     public string Path { get; private set; }
@@ -61,7 +52,7 @@ internal sealed class StaticFileContentCache : IAsyncDisposable
 
         try
         {
-            AddFilesFromPathToAccumulator(combinedToken);
+            AddFilesFromPathToAccumulator();
 
             _fsm.Start();
 
@@ -89,7 +80,7 @@ internal sealed class StaticFileContentCache : IAsyncDisposable
         return _runTask is not null ? _runTask : Task.CompletedTask;
     }
 
-    private void AddFilesFromPathToAccumulator(CancellationToken cancellationToken)
+    private void AddFilesFromPathToAccumulator()
     {
         var files = Directory.EnumerateFiles(
             path: Path,
@@ -98,12 +89,7 @@ internal sealed class StaticFileContentCache : IAsyncDisposable
         );
 
         foreach (var file in files)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                return;
-
             _fileAccumulator.Writer.TryWrite(file);
-        }
     }
 
     private async Task PutFileIntoCacheAsync(string filePath, CancellationToken cancellationToken)
