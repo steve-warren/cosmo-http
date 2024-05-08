@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Cosmo.Http;
 
 internal sealed class HttpServerConfiguration
@@ -14,16 +16,15 @@ internal static class ConfigurationProvider
     {
         return Task.FromResult<HttpServerConfiguration>(new());
     }
-}
 
-internal class TomlReader { }
+    public static void Load()
+    {
+        var toml = Encoding.UTF8.GetBytes("#comment 1\r\n#comment 2\r\n");
 
-internal enum TomlTokenType : byte
-{
-    None = 0,
-    Table = 1,
-    Key = 2,
-    String = 3,
-    Integer = 4,
-    Boolean = 5
+        var reader = new Utf8TomlReader(toml);
+
+        while(reader.Read())
+        {
+        }
+    }
 }

@@ -1,5 +1,7 @@
 ﻿using Cosmo.Http;
 
+ConfigurationProvider.Load();
+
 var routes = new Dictionary<string, Action<HttpRequest, HttpResponse>>
 {
     {

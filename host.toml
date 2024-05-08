@@ -1,3 +1,5 @@
+# cosmo http configuration file
+
 [binding]
 ip = "127.0.0.1"
 port = 8080
