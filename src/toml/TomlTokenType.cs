@@ -1,6 +1,6 @@
 namespace Cosmo.Http;
 
-internal enum TomlTokenType : byte
+public enum TomlTokenType : byte
 {
     None = 0,
     TableHeader = 1,
@@ -14,7 +14,8 @@ internal enum TomlTokenType : byte
     LocalDate = 9,
     LocalTime = 10,
     Array = 11,
-    StartTable = 12,
-    EndTable = 13,
-    Comment = 14
+    StartTableHeader = 12,
+    EndTableHeader = 13,
+    Comment = 14,
+    Table = 15
 }

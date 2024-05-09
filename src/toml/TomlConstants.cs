@@ -1,6 +1,6 @@
 namespace Cosmo.Http;
 
-internal static class TomlConstants
+public static class TomlConstants
 {
     public const byte OpenBracket = (byte)'[';
     public const byte ClosedBracket = (byte)']';

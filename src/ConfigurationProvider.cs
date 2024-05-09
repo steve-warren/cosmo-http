@@ -25,6 +25,7 @@ internal static class ConfigurationProvider
 
         while(reader.Read())
         {
+            var comment = Encoding.UTF8.GetString(reader.ValueSpan);
         }
     }
 }
