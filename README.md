@@ -1,2 +1,2 @@
 # cosmo-http
-A basic HTTP server implementation written in C#
+A basic HTTP server implementation written in C#.

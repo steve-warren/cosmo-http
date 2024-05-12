@@ -7,6 +7,5 @@ public enum TomlTokenType : byte
     Key = 2,
     Value = 3,
     Array = 11,
-    Comment = 14,
-    Table = 15
+    Comment = 14
 }

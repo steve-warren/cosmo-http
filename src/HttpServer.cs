@@ -25,7 +25,8 @@ public sealed class HttpServer
         string endpoint,
         int port,
         Dictionary<string, Action<HttpRequest, HttpResponse>> routes,
-        string staticContentPath
+        string staticContentPath,
+        Dictionary<string, string> mimeTypes
     )
     {
         _cts = new();
@@ -35,7 +36,7 @@ public sealed class HttpServer
         Endpoint = endpoint;
         Port = port;
 
-        _contentCache = new StaticFileContentCache(staticContentPath, []);
+        _contentCache = new StaticFileContentCache(staticContentPath, mimeTypes);
     }
 
     public string Endpoint { get; private set; }
@@ -65,11 +66,9 @@ public sealed class HttpServer
 
     public void Shutdown()
     {
-        if (!_cts.IsCancellationRequested)
-        {
-            Console.WriteLine("\nShutting down...");
-            _cts.Cancel();
-        }
+        if (_cts.IsCancellationRequested) return;
+        Console.WriteLine("\nShutting down...");
+        _cts.Cancel();
     }
 
     public ValueTask ShutdownAndWaitAsync()
@@ -116,11 +115,9 @@ public sealed class HttpServer
         {
             while (await reader.WaitToReadAsync(_cts.Token).ConfigureAwait(false))
             {
-                if (reader.TryRead(out var receiveTask))
-                {
-                    if (!receiveTask.IsCompleted)
-                        await receiveTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-                }
+                if (!reader.TryRead(out var receiveTask)) continue;
+                if (!receiveTask.IsCompleted)
+                    await receiveTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             }
         }
         catch (OperationCanceledException)
@@ -196,7 +193,7 @@ public sealed class HttpServer
             {
                 await clientSocket
                     .SendAsync(
-                        Encoding.UTF8.GetBytes("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"),
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"u8.ToArray(),
                         cancellationToken
                     )
                     .ConfigureAwait(false);

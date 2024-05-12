@@ -77,7 +77,7 @@ internal sealed class StaticFileContentCache : IAsyncDisposable
     {
         _cts.Cancel();
 
-        return _runTask is not null ? _runTask : Task.CompletedTask;
+        return _runTask ?? Task.CompletedTask;
     }
 
     private void AddFilesFromPathToAccumulator()

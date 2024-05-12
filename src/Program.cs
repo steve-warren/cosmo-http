@@ -31,7 +31,14 @@ var routes = new Dictionary<string, Action<HttpRequest, HttpResponse>>
     }
 };
 
-var server = new HttpServer(endpoint: "127.0.0.1", 8080, routes, "wwwroot/");
+var mimeTypes = ConfigurationProvider.GetConfigurationSection("mime_types");
+
+var server = new HttpServer(
+    endpoint: "127.0.0.1",
+    8080,
+    routes,
+    "wwwroot/",
+    mimeTypes);
 
 Console.CancelKeyPress += (sender, e) =>
 {

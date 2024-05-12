@@ -1,7 +1,5 @@
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
+using System.Buffers.Text;
 using System.Text;
-using System.Text.Json;
 
 namespace Cosmo.Http;
 
@@ -20,87 +18,69 @@ public ref struct Utf8TomlReader
 
     public ReadOnlySpan<byte> ValueSpan { get; private set; }
 
-    public readonly TomlTokenType TokenType
-    {
-        get => _tokenType;
-    }
+    public readonly TomlTokenType TokenType => _tokenType;
 
     public readonly bool GetBoolean()
     {
-        throw new NotImplementedException();
+        _ = Utf8Parser.TryParse(ValueSpan, out bool value, out _);
+
+        return value;
     }
 
-    public readonly int GetInt32() => throw new NotImplementedException();
+    public readonly int GetInt32()
+    {
+        _ = Utf8Parser.TryParse(ValueSpan, out int value, out _);
 
-    public readonly long GetInt64() => throw new NotImplementedException();
+        return value;
+    }
+
+    public readonly long GetInt64()
+    {
+        _ = Utf8Parser.TryParse(ValueSpan, out long value, out _);
+
+        return value;
+    }
 
     public readonly string? GetString() => Encoding.UTF8.GetString(ValueSpan);
-
-    public readonly void Skip() => throw new NotImplementedException();
 
     public bool Read()
     {
         ValueSpan = default;
 
-    ReadMarker:
+        ReadMarker:
 
         if (_consumed >= _buffer.Length)
             return false;
 
-        var marker = _buffer[_consumed];
-
-        if (marker == TomlConstants.OpenBracket)
+        switch (_buffer[_consumed])
         {
-            ConsumeTableHeader();
-            return true;
-        }
-        else if (marker == TomlConstants.Hash)
-        {
-            ConsumeComment();
-            return true;
-        }
-        else if (marker == TomlConstants.LineFeed)
-        {
-            ConsumeNewLine();
-            goto ReadMarker;
-        }
-        else if (marker == TomlConstants.CarriageReturn)
-        {
-            ConsumeNewLine();
-            goto ReadMarker;
-        }
-        else if (
-            (marker >= TomlConstants.AsciiLowercaseA && marker <= TomlConstants.AsciiLowercaseZ)
-            || (marker >= TomlConstants.AsciiUppercaseA && marker <= TomlConstants.AsciiUppercaseZ)
-            || (marker >= TomlConstants.AsciiZero && marker <= TomlConstants.AsciiNine)
-            || marker == TomlConstants.Underscore
-            || marker == TomlConstants.Dash
-        )
-        {
-            ConsumeKey();
-            return true;
-        }
-        else if (marker == TomlConstants.KeyValueSeparator)
-        {
-            ConsumeValue();
-            return true;
+            case TomlConstants.LineFeed:
+                ConsumeNewLine();
+                goto ReadMarker;
+            case TomlConstants.CarriageReturn:
+                ConsumeNewLine();
+                goto ReadMarker;
+            case TomlConstants.OpenBracket:
+                ConsumeTableHeader();
+                return true;
+            case TomlConstants.Hash:
+                ConsumeComment();
+                return true;
+            case >= TomlConstants.AsciiLowercaseA and <= TomlConstants.AsciiLowercaseZ:
+            case >= TomlConstants.AsciiUppercaseA and <= TomlConstants.AsciiUppercaseZ:
+            case >= TomlConstants.AsciiZero and <= TomlConstants.AsciiNine:
+            case TomlConstants.Underscore:
+            case TomlConstants.Dash:
+            case TomlConstants.Quote:
+                ConsumeKey();
+                return true;
+            case TomlConstants.KeyValueSeparator:
+                ConsumeValue();
+                return true;
         }
 
         return false;
     }
-
-    public readonly bool ValueTextEquals(string? text)
-    {
-        return ValueTextEquals(text.AsSpan());
-    }
-
-    public readonly bool ValueTextEquals(ReadOnlySpan<char> text) => throw new NotImplementedException();
-
-    public readonly bool ValueTextEquals(ReadOnlySpan<byte> utf8Text) => throw new NotImplementedException();
-
-    public void CopyString(Span<char> destination) => throw new NotImplementedException();
-
-    public void CopyString(Span<byte> utf8Destination) => throw new NotImplementedException();
 
     private void ConsumeNewLine()
     {
@@ -134,9 +114,7 @@ public ref struct Utf8TomlReader
         ConsumeWhitespace();
 
         var slice = _buffer[_consumed..];
-        var clrfIndex = slice.IndexOfAny(
-            TomlConstants.CarriageReturn,
-            TomlConstants.LineFeed);
+        var clrfIndex = slice.IndexOfAny(TomlConstants.CarriageReturn, TomlConstants.LineFeed);
 
         ValueSpan = clrfIndex != -1 ? slice[..clrfIndex] : throw new TomlException();
 
@@ -164,9 +142,7 @@ public ref struct Utf8TomlReader
         ConsumeWhitespace();
 
         var slice = _buffer[_consumed..];
-        var clrfIndex = slice.IndexOfAny(
-            TomlConstants.CarriageReturn,
-            TomlConstants.LineFeed);
+        var clrfIndex = slice.IndexOfAny(TomlConstants.CarriageReturn, TomlConstants.LineFeed);
 
         ValueSpan = clrfIndex != -1 ? slice[..clrfIndex] : throw new TomlException();
 
@@ -175,7 +151,7 @@ public ref struct Utf8TomlReader
 
     private static int ClampStart(ReadOnlySpan<byte> span, byte marker)
     {
-        for(var start = 0; start < span.Length; start++)
+        for (var start = 0; start < span.Length; start++)
         {
             if (span[start] != marker)
                 return start;
