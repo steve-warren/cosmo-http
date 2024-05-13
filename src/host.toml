@@ -22,6 +22,6 @@ default = "application/octect-stream"
 
 [static_sites.local]
 host = "www.local"
-root_directory = "/wwwroot"
+root_directory = "wwwroot/"
 default_file = "index.html"
 

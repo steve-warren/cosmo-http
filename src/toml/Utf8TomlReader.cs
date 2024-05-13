@@ -66,9 +66,12 @@ public ref struct Utf8TomlReader
             case TomlConstants.Hash:
                 ConsumeComment();
                 return true;
-            case >= TomlConstants.AsciiLowercaseA and <= TomlConstants.AsciiLowercaseZ:
-            case >= TomlConstants.AsciiUppercaseA and <= TomlConstants.AsciiUppercaseZ:
-            case >= TomlConstants.AsciiZero and <= TomlConstants.AsciiNine:
+            case >= TomlConstants.AsciiLowercaseA
+            and <= TomlConstants.AsciiLowercaseZ:
+            case >= TomlConstants.AsciiUppercaseA
+            and <= TomlConstants.AsciiUppercaseZ:
+            case >= TomlConstants.AsciiZero
+            and <= TomlConstants.AsciiNine:
             case TomlConstants.Underscore:
             case TomlConstants.Dash:
             case TomlConstants.Quote:
@@ -116,7 +119,12 @@ public ref struct Utf8TomlReader
         var slice = _buffer[_consumed..];
         var clrfIndex = slice.IndexOfAny(TomlConstants.CarriageReturn, TomlConstants.LineFeed);
 
-        ValueSpan = clrfIndex != -1 ? slice[..clrfIndex] : throw new TomlException();
+        var valueSlice = clrfIndex != -1 ? slice[..clrfIndex] : throw new TomlException();
+
+        if (valueSlice[0] == TomlConstants.Quote && valueSlice[^1] == TomlConstants.Quote)
+            ValueSpan = valueSlice[1..^1];
+        else
+            ValueSpan = valueSlice;
 
         _consumed += clrfIndex + 1;
     }

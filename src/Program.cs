@@ -32,13 +32,16 @@ var routes = new Dictionary<string, Action<HttpRequest, HttpResponse>>
 };
 
 var mimeTypes = ConfigurationProvider.GetConfigurationSection("mime_types");
+var binding = ConfigurationProvider.GetConfigurationSection("binding");
+var staticSites = ConfigurationProvider.GetConfigurationSection("static_sites.local");
 
 var server = new HttpServer(
-    endpoint: "127.0.0.1",
-    8080,
+    endpoint: binding.GetString("ip"),
+    port: binding.GetInt32("port"),
     routes,
-    "wwwroot/",
-    mimeTypes);
+    staticSites.GetString("root_directory"),
+    mimeTypes.ToDictionary()
+);
 
 Console.CancelKeyPress += (sender, e) =>
 {
