@@ -1,7 +1,7 @@
+using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading.Channels;
 
 namespace Cosmo.Http;
 
@@ -16,7 +16,6 @@ public class HttpResponse
 public sealed class HttpServer
 {
     private readonly CancellationTokenSource _cts;
-    private readonly Channel<Task> _pendingRequests;
     private readonly Dictionary<string, Action<HttpRequest, HttpResponse>> _routes;
     private readonly StaticFileContentCache _contentCache;
     private Task? _runTask;
@@ -31,7 +30,6 @@ public sealed class HttpServer
     {
         _cts = new();
         _routes = routes;
-        _pendingRequests = Channel.CreateUnbounded<Task>();
 
         Endpoint = endpoint;
         Port = port;
@@ -50,13 +48,12 @@ public sealed class HttpServer
             : throw new InvalidOperationException("Server already running.");
 
         Console.WriteLine("Starting server...");
-        using var serverSocket = Bind(Endpoint, Port);
+        using var listenerSocket = BindListenerSocket(Endpoint, Port);
 
-        var requestHandlerTask = HandleIncomingRequestsAsync(serverSocket);
-        var requestCompletionTask = CompleteIncomingRequestTasksAsync();
+        var requestHandlerTask = HandleIncomingRequestsAsync(listenerSocket);
         var contentCacheTask = _contentCache.RunAsync(_cts.Token);
 
-        await Task.WhenAll([requestHandlerTask, requestCompletionTask, contentCacheTask])
+        await Task.WhenAll([requestHandlerTask, contentCacheTask])
             .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 
         tcs.SetResult();
@@ -82,80 +79,58 @@ public sealed class HttpServer
 
     private async Task HandleIncomingRequestsAsync(Socket serverSocket)
     {
-        var writer = _pendingRequests.Writer;
-
         while (true)
         {
             try
             {
-                var clientSocket = await serverSocket.AcceptAsync(_cts.Token).ConfigureAwait(false);
+                using var requestSocket = await serverSocket.AcceptAsync(_cts.Token).ConfigureAwait(false);
 
-                var receiveTask = ReceiveAsync(clientSocket, _cts.Token);
-
-                writer.TryWrite(receiveTask);
+                _ = ReceiveAsync(requestSocket, _cts.Token);
             }
             catch (OperationCanceledException)
             {
-                writer.Complete();
                 break;
             }
-            catch (Exception ex)
-            {
-                writer.Complete(ex);
-                throw;
-            }
         }
     }
 
-    private async Task CompleteIncomingRequestTasksAsync()
+    private static Socket BindListenerSocket(string endpoint, int port)
     {
-        var reader = _pendingRequests.Reader;
+        const int SOL_SOCKET = 0xffff;        // Socket level
+        const int SO_REUSEPORT = 0x0200;      // Platform-specific value
 
-        try
-        {
-            while (await reader.WaitToReadAsync(_cts.Token).ConfigureAwait(false))
-            {
-                if (!reader.TryRead(out var receiveTask)) continue;
-                if (!receiveTask.IsCompleted)
-                    await receiveTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-    }
-
-    private static Socket Bind(string endpoint, int port)
-    {
         var localhost = IPAddress.Parse(endpoint);
         var ipEndpoint = new IPEndPoint(localhost, port);
 
-        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
-        socket.Bind(ipEndpoint);
-        socket.Listen();
+        var listener = new Socket(SocketType.Stream, ProtocolType.Tcp);
+        listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+        listener.SetRawSocketOption(SOL_SOCKET, SO_REUSEPORT, BitConverter.GetBytes(1));
+        listener.Bind(ipEndpoint);
+        listener.Listen();
 
         Console.WriteLine($"Listening on http://{ipEndpoint.Address}:{ipEndpoint.Port}");
 
-        return socket;
+        return listener;
     }
 
-    private async Task ReceiveAsync(Socket clientSocket, CancellationToken cancellationToken)
+    private async Task ReceiveAsync(Socket requestSocket, CancellationToken cancellationToken)
     {
-        using (clientSocket)
+        try
         {
-            var buffer = new byte[1024];
-
-            var received = await clientSocket
-                .ReceiveAsync(buffer, SocketFlags.None, cancellationToken)
+            requestSocket.NoDelay = true;
+            var buffer = ArrayPool<byte>.Shared.Rent(1024);
+            var memory = buffer.AsMemory(0, 1024);
+            
+            var received = await requestSocket
+                .ReceiveAsync(memory, SocketFlags.None, cancellationToken)
                 .ConfigureAwait(false);
 
             if (received == 0)
                 return;
 
-            var httpRequest = ParseRequest(new ArraySegment<byte>(buffer, 0, received));
+            var httpRequest = ParseRequest(memory[..received].Span);
 
-            Console.WriteLine($"route {httpRequest.Uri}");
+            //Console.WriteLine($"route {httpRequest.Uri}");
 
             if (_routes.TryGetValue(httpRequest.Uri, out var uriHandler))
             {
@@ -167,12 +142,15 @@ public sealed class HttpServer
                     $"HTTP/1.1 200 OK\r\nContent-Type:{httpResponse.ContentType}\r\nContent-Length: {httpResponse.Content.Length}\r\n\r\n"
                 );
 
-                await clientSocket.SendAsync(response, cancellationToken).ConfigureAwait(false);
-                await clientSocket.SendAsync(httpResponse.Content).ConfigureAwait(false);
+                await requestSocket.SendAsync(response, cancellationToken)
+                    .ConfigureAwait(false);
+                await requestSocket.SendAsync(httpResponse.Content)
+                    .ConfigureAwait(false);
 
-                Console.WriteLine("200 OK");
+                //Console.WriteLine("200 OK");
             }
-            else if (_contentCache.TryGet(httpRequest.Uri[1..], out var cacheEntry))
+            else if (_contentCache.TryGet(httpRequest.Uri[1..],
+                         out var cacheEntry))
             {
                 var httpResponse = new HttpResponse
                 {
@@ -184,16 +162,19 @@ public sealed class HttpServer
                     $"HTTP/1.1 200 OK\r\nContent-Type:{httpResponse.ContentType}\r\nContent-Length: {httpResponse.Content.Length}\r\n\r\n"
                 );
 
-                await clientSocket.SendAsync(response, cancellationToken).ConfigureAwait(false);
-                await clientSocket.SendAsync(httpResponse.Content).ConfigureAwait(false);
+                await requestSocket.SendAsync(response, cancellationToken)
+                    .ConfigureAwait(false);
+                await requestSocket.SendAsync(httpResponse.Content)
+                    .ConfigureAwait(false);
 
-                Console.WriteLine("200 OK");
+                //Console.WriteLine("200 OK");
             }
             else
             {
-                await clientSocket
+                await requestSocket
                     .SendAsync(
-                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"u8.ToArray(),
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"u8
+                            .ToArray(),
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -201,9 +182,21 @@ public sealed class HttpServer
                 Console.WriteLine("404 Not Found");
             }
         }
+
+        catch (SocketException ex) when (
+            ex.SocketErrorCode is SocketError.OperationAborted or SocketError.ConnectionReset or SocketError.Shutdown)
+        {
+            // normal case during load tests
+            return;
+        }
+
+        catch (Exception ex)
+        {
+            Console.WriteLine("Unhandled exception while handling socket: " + ex);
+        }
     }
 
-    private static HttpRequest ParseRequest(ArraySegment<byte> requestLineSegment)
+    private static HttpRequest ParseRequest(ReadOnlySpan<byte> requestLineSegment)
     {
         var requestBody = Encoding.UTF8.GetString(requestLineSegment).AsSpan();
 
